@@ -133,3 +133,48 @@ impl<'d> Drop for OneWireBusDriver<'d> {
         esp!(unsafe { onewire_bus_del(self._bus) }).unwrap();
     }
 }
+
+pub mod ds18b20 {
+    use core::marker::PhantomData;
+    use core::ptr;
+
+    use super::Device;
+    use esp_idf_sys::esp;
+    use esp_idf_sys::{onewire, EspError};
+
+    pub struct Temperature(f32);
+
+    pub struct DS18B20Device<'d> {
+        _ds18b20: onewire::ds18b20_device_handle_t,
+        _p: PhantomData<&'d ()>,
+    }
+    impl<'d> DS18B20Device<'d> {
+        pub fn new(device: &mut Device) -> Result<Self, EspError> {
+            let temperature_config = onewire::ds18b20_config_t {};
+            let mut new_ds18b20: onewire::ds18b20_device_handle_t = ptr::null_mut();
+            // let device = device._device;
+            esp!(unsafe {
+                onewire::ds18b20_new_device(
+                    &mut *device._device,
+                    &temperature_config,
+                    &mut new_ds18b20,
+                )
+            })?;
+            Ok(Self {
+                _ds18b20: new_ds18b20,
+                _p: PhantomData,
+            })
+        }
+
+        pub fn get_temperature(&self) -> Result<Temperature, EspError> {
+            Ok(Temperature(0.0))
+        }
+    }
+
+    // impl DS18B20Device for Device {
+    //     type Temperature = Temperature;
+    //     fn get_temperature(&self) -> Result<Self::Temperature, EspError> {
+    //         self._device
+    //     }
+    // }
+}
