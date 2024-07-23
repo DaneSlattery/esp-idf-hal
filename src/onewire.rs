@@ -14,6 +14,7 @@
 //!
 //! See the `examples/` folder of this repository for more.
 
+use core::borrow::Borrow;
 use core::marker::PhantomData;
 use core::ptr;
 
@@ -22,24 +23,36 @@ use esp_idf_sys::*;
 use crate::peripheral::Peripheral;
 
 #[derive(Debug)]
-pub struct Device<'b> {
+pub struct Device<'b, T>
+where
+    T: Borrow<OneWireBusDriver<'b>> + 'b,
+{
     _device: onewire_device_t,
+    _bus: &'b T,
     // _bus: &'b BusDriver<'b>, // not sure how I would hold a reference to this aside from the handle
     _p: PhantomData<&'b ()>, // holds the lifetime since the device is linked to the lifetime of the bus
 }
 
-impl<'a> Device<'a> {
-    fn new(device_handle: onewire_device_t) -> Self {
+impl<'b, T> Device<'b, T>
+where
+    T: Borrow<OneWireBusDriver<'b>> + 'b,
+{
+    fn new(device_handle: onewire_device_t, bus: &'b T) -> Self {
         Self {
             _device: device_handle,
+            _bus: bus,
             _p: PhantomData,
         }
     }
 
-    /// get the handle of the bus the device is attached to
-    pub fn bus(&self) -> onewire_bus_handle_t {
-        self._device.bus
+    pub fn bus(&self) -> &T {
+        self._bus
     }
+
+    /// get the handle of the bus the device is attached to
+    // pub fn bus(&self) -> onewire_bus_handle_t {
+    //     self._device.bus
+    // }
 
     /// get the device address
     pub fn address(&self) -> u64 {
@@ -48,46 +61,60 @@ impl<'a> Device<'a> {
 }
 
 /// wrapper around the device iterator to search for available devices on the bus
-pub struct DeviceSearch<'b> {
+pub struct DeviceSearch<'b, T>
+where
+    T: Borrow<OneWireBusDriver<'b>> + 'b,
+{
     _search: onewire_device_iter_handle_t,
+    _bus: &'b T,
     _p: PhantomData<&'b ()>, // holds the lifetime since the search is linked to the lifetime of the bus
 }
 
-impl<'b> DeviceSearch<'b> {
-    fn new(bus: &mut OneWireBusDriver) -> Result<Self, EspError> {
+impl<'b, T> DeviceSearch<'b, T>
+where
+    T: Borrow<OneWireBusDriver<'b>> + 'b,
+{
+    fn new(bus: &'b T) -> Result<Self, EspError> {
         let mut my_iter: onewire_device_iter_handle_t = ptr::null_mut();
 
-        esp!(unsafe { onewire_new_device_iter(bus._bus, &mut my_iter) })?;
+        esp!(unsafe { onewire_new_device_iter(bus.borrow()._bus, &mut my_iter) })?;
 
         Ok(Self {
             _search: my_iter,
+            _bus: bus,
             _p: PhantomData,
         })
     }
 
     /// Search for the next device on the bus and yield it.
-    fn next_device(&mut self) -> Result<Device<'b>, EspError> {
+    pub fn next_device(&'b mut self) -> Result<Device<'b, T>, EspError> {
         // let next_onewire_device: *mut onewire_device_t = ptr::null_mut();
         let mut next_onewire_device = onewire_device_t::default();
         esp!(unsafe { onewire_device_iter_get_next(self._search, &mut next_onewire_device) })?;
 
-        Ok(Device::new(next_onewire_device))
+        Ok(Device::new(next_onewire_device, self._bus))
     }
 }
 
-impl<'b> Iterator for DeviceSearch<'b> {
-    type Item = Device<'b>;
+// impl<'b, T> Iterator for DeviceSearch<'b, T>
+// where
+//     T: Borrow<OneWireBusDriver<'b>> + 'b,
+// {
+//     type Item = Device<'b, T>;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Ok(dev) = self.next_device() {
-            Some(dev)
-        } else {
-            None
-        }
-    }
-}
+//     fn next(&mut self) -> Option<Self::Item> {
+//         if let Ok(dev) = self.next_device() {
+//             Some(dev)
+//         } else {
+//             None
+//         }
+//     }
+// }
 
-impl<'b> Drop for DeviceSearch<'b> {
+impl<'b, T> Drop for DeviceSearch<'b, T>
+where
+    T: Borrow<OneWireBusDriver<'b>> + 'b,
+{
     fn drop(&mut self) {
         esp!(unsafe { onewire_del_device_iter(self._search) }).unwrap();
     }
@@ -124,7 +151,7 @@ impl<'d> OneWireBusDriver<'d> {
         esp!(unsafe { onewire_bus_reset(self._bus) })
     }
 
-    pub fn search(&mut self) -> Result<DeviceSearch, EspError> {
+    pub fn search(&mut self) -> Result<DeviceSearch<OneWireBusDriver>, EspError> {
         DeviceSearch::new(self)
     }
 }
@@ -141,6 +168,7 @@ pub mod ds18b20 {
     use core::time::Duration;
 
     use super::Device;
+    use super::OneWireBusDriver;
     use esp_idf_sys::esp;
     use esp_idf_sys::EspError;
     use esp_idf_sys::*;
@@ -184,7 +212,7 @@ pub mod ds18b20 {
         _p: PhantomData<&'d ()>,
     }
     impl<'d> DS18B20Device<'d> {
-        pub fn new(mut device: Device) -> Result<Self, EspError> {
+        pub fn new(mut device: Device<'d, OneWireBusDriver<'d>>) -> Result<Self, EspError> {
             let temperature_config = ds18b20_config_t {};
             let mut new_ds18b20: ds18b20_device_handle_t = ptr::null_mut();
             // let device = device._device;

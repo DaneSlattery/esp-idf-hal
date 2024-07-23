@@ -64,11 +64,16 @@ fn main() -> anyhow::Result<()> {
     let onewire_gpio_pin = peripherals.pins.gpio16;
 
     let mut rmt_onewire: OneWireBusDriver = OneWireBusDriver::new(onewire_gpio_pin)?;
-    let search: DeviceSearch = rmt_onewire.search()?;
-
-    for device in search {
-        println!("Found Device: {}", device.address());
+    let mut search: DeviceSearch<OneWireBusDriver> = rmt_onewire.search()?;
+    let next_device = search.next_device();
+    match next_device {
+        Ok(x) => println!("Found Device: {}", x.address()),
+        Err(x) => println!("No (more) devices found",),
     }
+
+    // for device in search {
+    //     println!("Found Device: {}", device.address());
+    // }
     loop {
         FreeRtos::delay_ms(3000);
     }
