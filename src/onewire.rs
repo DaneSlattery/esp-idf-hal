@@ -67,6 +67,7 @@ impl<'b> DeviceSearch<'b> {
 
     /// Search for the next device on the bus and yield it.
     fn next_device(&mut self) -> Result<Device<'b>, EspError> {
+        // let next_onewire_device: *mut onewire_device_t = ptr::null_mut();
         let mut next_onewire_device = onewire_device_t::default();
         esp!(unsafe { onewire_device_iter_get_next(self._search, &mut next_onewire_device) })?;
 
@@ -137,44 +138,85 @@ impl<'d> Drop for OneWireBusDriver<'d> {
 pub mod ds18b20 {
     use core::marker::PhantomData;
     use core::ptr;
+    use core::time::Duration;
 
     use super::Device;
     use esp_idf_sys::esp;
-    use esp_idf_sys::{onewire, EspError};
+    use esp_idf_sys::EspError;
+    use esp_idf_sys::*;
+
+    // Statistically unlikely temperature
+    const ABSOLUTE_ZERO: f32 = -273.15;
+
+    /// ADC Resolution for the temperature probe
+    ///
+    /// The resolution of the temperature sensor is user-configurable to 9, 10, 11, or 12 bits,
+    /// corresponding to increments of 0.5°C, 0.25°C, 0.125°C,
+    /// and 0.0625°C, respectively.
+    /// The default resolution at
+    /// power-up is 12-bit.
+    #[repr(u32)]
+    pub enum Resolution {
+        BIT9 = ds18b20_resolution_t_DS18B20_RESOLUTION_9B,
+        BIT10 = ds18b20_resolution_t_DS18B20_RESOLUTION_10B,
+        BIT11 = ds18b20_resolution_t_DS18B20_RESOLUTION_11B,
+        BIT12 = ds18b20_resolution_t_DS18B20_RESOLUTION_12B,
+    }
+
+    impl Resolution {
+        /// The minimum delay required between a temperature trigger
+        /// and the corresponding read depending on the selected resolution.
+        pub fn get_min_delay(&self) -> Duration {
+            match self {
+                Self::BIT9 => Duration::from_micros(93750),    // 93.75 ms
+                Self::BIT10 => Duration::from_micros(187500),  // 187.5 ms
+                Self::BIT11 => Duration::from_micros(375000),  // 375 ms
+                Self::BIT12 => Duration::from_micros(7500000), // 750 ms
+            }
+        }
+    }
 
     pub struct Temperature(f32);
 
     pub struct DS18B20Device<'d> {
-        _ds18b20: onewire::ds18b20_device_handle_t,
+        _ds18b20: ds18b20_device_handle_t,
+        _measurement_triggered: bool,
         _p: PhantomData<&'d ()>,
     }
     impl<'d> DS18B20Device<'d> {
-        pub fn new(device: &mut Device) -> Result<Self, EspError> {
-            let temperature_config = onewire::ds18b20_config_t {};
-            let mut new_ds18b20: onewire::ds18b20_device_handle_t = ptr::null_mut();
+        pub fn new(mut device: Device) -> Result<Self, EspError> {
+            let temperature_config = ds18b20_config_t {};
+            let mut new_ds18b20: ds18b20_device_handle_t = ptr::null_mut();
             // let device = device._device;
             esp!(unsafe {
-                onewire::ds18b20_new_device(
-                    &mut *device._device,
+                ds18b20_new_device(
+                    &mut device._device as *mut _,
                     &temperature_config,
                     &mut new_ds18b20,
                 )
             })?;
             Ok(Self {
                 _ds18b20: new_ds18b20,
+                _measurement_triggered: false,
                 _p: PhantomData,
             })
         }
 
+        pub fn trigger_temperature_conversion(&mut self) -> Result<(), EspError> {
+            esp!(unsafe { ds18b20_trigger_temperature_conversion(self._ds18b20) })?;
+            self._measurement_triggered = true;
+            Ok(())
+        }
+
         pub fn get_temperature(&self) -> Result<Temperature, EspError> {
-            Ok(Temperature(0.0))
+            if !self._measurement_triggered {
+                return Err(EspError::from_infallible::<ESP_FAIL>());
+            }
+            let mut temperature_raw: f32 = ABSOLUTE_ZERO;
+            esp!(unsafe {
+                ds18b20_get_temperature(self._ds18b20, &mut temperature_raw as *mut f32)
+            })?;
+            Ok(Temperature(temperature_raw))
         }
     }
-
-    // impl DS18B20Device for Device {
-    //     type Temperature = Temperature;
-    //     fn get_temperature(&self) -> Result<Self::Temperature, EspError> {
-    //         self._device
-    //     }
-    // }
 }
