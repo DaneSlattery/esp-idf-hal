@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Modem: add managed SIM7600 cellular connections over PPP, including SIM/PIN handling, network registration, authentication, retries, connection status, and graceful shutdown. See `examples/src/bin/lte_modem.rs`.
+
 ### Fixed
 - Netif: align the default PPP client with ESP-IDF's PPP configuration, correctly deserialize `IP_EVENT_PPP_LOST_IP`, and keep custom driver lifecycle state in sync across start/stop calls.
 
