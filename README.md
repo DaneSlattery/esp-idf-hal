@@ -16,9 +16,6 @@ The crates form a single Cargo workspace. Each crate keeps its own `README.md` a
 MCU=esp32c3 cargo espflash flash --target riscv32imc-esp-espidf --bin wifi --monitor
 ```
 
-See [PPP modem integration](examples/PPP_MODEM.md) for composing an external
-modem driver with the ESP-NETIF PPP bridge.
-
 ## Getting started
 
 - The [esp-idf-template](https://github.com/esp-rs/esp-idf-template) project template
