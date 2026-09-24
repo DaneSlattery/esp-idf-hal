@@ -1040,13 +1040,13 @@ mod driver {
     // when this outer value moves. Both callbacks are Send and `T` owns the netif.
     unsafe impl<T> Send for EspNetifDriver<'_, T> where T: BorrowMut<EspNetif> + Send {}
 
-    /// The default number of outbound packets buffered by [`AsyncEspNetifDriver`].
+    /// The default number of outbound packets buffered by [`AsyncEspNetifChannel`].
     pub const ASYNC_NETIF_TX_QUEUE_SIZE: usize = 8;
 
     /// An error produced while forwarding bytes from an asynchronous transport
     /// into an [`EspNetifDriver`].
     #[derive(Debug)]
-    pub enum AsyncEspNetifDriverError<E> {
+    pub enum AsyncEspNetifChannelError<E> {
         /// Reading from the transport failed.
         Read(E),
         /// Writing to the transport failed.
@@ -1055,7 +1055,7 @@ mod driver {
         Netif(EspError),
     }
 
-    impl<E> core::fmt::Display for AsyncEspNetifDriverError<E>
+    impl<E> core::fmt::Display for AsyncEspNetifChannelError<E>
     where
         E: core::fmt::Display,
     {
@@ -1069,7 +1069,7 @@ mod driver {
     }
 
     #[cfg(feature = "std")]
-    impl<E> std::error::Error for AsyncEspNetifDriverError<E> where
+    impl<E> std::error::Error for AsyncEspNetifChannelError<E> where
         E: core::fmt::Debug + core::fmt::Display
     {
     }
@@ -1082,7 +1082,7 @@ mod driver {
     /// [`Self::transmit`]. The two methods should be driven concurrently.
     ///
     /// ESP-NETIF invokes its transmit callback synchronously, while
-    /// [`embedded_io_async::Write`] is asynchronous. Outbound packets are therefore
+    /// [`Write`] is asynchronous. Outbound packets are therefore
     /// copied into a bounded queue. If that queue is full, ESP-NETIF is notified
     /// with `ESP_ERR_NO_MEM` instead of blocking its TCP/IP task.
     ///
@@ -1090,7 +1090,7 @@ mod driver {
     /// example, after obtaining an `a76xx::PppIo` stream from `connect_ppp`:
     ///
     /// ```ignore
-    /// let mut bridge = AsyncEspNetifDriver::<_, 8>::new(
+    /// let mut bridge = AsyncEspNetifChannel::<_, 8>::new(
     ///     EspNetif::new(NetifStack::Ppp)?,
     ///     |netif| netif.set_ppp_conf(&PppConfiguration::default()),
     /// )?;
@@ -1099,7 +1099,7 @@ mod driver {
     /// let mut rx_buffer = [0; 1536];
     /// bridge.run(&mut ppp_io, &mut rx_buffer).await?;
     /// ```
-    pub struct AsyncEspNetifDriver<'d, T, const TX_QUEUE_SIZE: usize = ASYNC_NETIF_TX_QUEUE_SIZE>
+    pub struct AsyncEspNetifChannel<'d, T, const TX_QUEUE_SIZE: usize = ASYNC_NETIF_TX_QUEUE_SIZE>
     where
         T: BorrowMut<EspNetif>,
     {
@@ -1107,7 +1107,7 @@ mod driver {
         tx_queue: Arc<Channel<EspRawMutex, Vec<u8>, TX_QUEUE_SIZE>>,
     }
 
-    impl<T, const TX_QUEUE_SIZE: usize> AsyncEspNetifDriver<'static, T, TX_QUEUE_SIZE>
+    impl<T, const TX_QUEUE_SIZE: usize> AsyncEspNetifChannel<'static, T, TX_QUEUE_SIZE>
     where
         T: BorrowMut<EspNetif>,
     {
@@ -1120,7 +1120,7 @@ mod driver {
         }
     }
 
-    impl<'d, T, const TX_QUEUE_SIZE: usize> AsyncEspNetifDriver<'d, T, TX_QUEUE_SIZE>
+    impl<'d, T, const TX_QUEUE_SIZE: usize> AsyncEspNetifChannel<'d, T, TX_QUEUE_SIZE>
     where
         T: BorrowMut<EspNetif>,
     {
@@ -1156,21 +1156,21 @@ mod driver {
         /// value of zero has the meaning assigned by the underlying reader.
         pub async fn receive<R>(
             &self,
-            reader: &mut R,
+            mut reader: R,
             buffer: &mut [u8],
-        ) -> Result<usize, AsyncEspNetifDriverError<R::Error>>
+        ) -> Result<usize, AsyncEspNetifChannelError<R::Error>>
         where
-            R: Read + ?Sized,
+            R: Read,
         {
             let len = reader
                 .read(buffer)
                 .await
-                .map_err(AsyncEspNetifDriverError::Read)?;
+                .map_err(AsyncEspNetifChannelError::Read)?;
 
             if len > 0 {
                 self.driver
                     .rx(&buffer[..len])
-                    .map_err(AsyncEspNetifDriverError::Netif)?;
+                    .map_err(AsyncEspNetifChannelError::Netif)?;
             }
 
             Ok(len)
@@ -1179,9 +1179,9 @@ mod driver {
         /// Writes one packet produced by ESP-NETIF to a PPP data stream.
         ///
         /// Repeatedly call this concurrently with [`Self::receive`].
-        pub async fn transmit<W>(&self, writer: &mut W) -> Result<usize, W::Error>
+        pub async fn transmit<W>(&self, mut writer:  W) -> Result<usize, W::Error>
         where
-            W: Write + ?Sized,
+            W: Write,
         {
             let packet = self.tx_queue.receive().await;
             let len = packet.len();
@@ -1202,27 +1202,27 @@ mod driver {
         /// by returning zero bytes.
         pub async fn run<IO>(
             &self,
-            io: &mut IO,
+            mut io: IO,
             rx_buffer: &mut [u8],
-        ) -> Result<(), AsyncEspNetifDriverError<IO::Error>>
+        ) -> Result<(), AsyncEspNetifChannelError<IO::Error>>
         where
-            IO: Read + Write + ?Sized,
+            IO: Read + Write,
         {
             loop {
                 match select(io.read(rx_buffer), self.tx_queue.receive()).await {
                     Either::First(result) => {
-                        let len = result.map_err(AsyncEspNetifDriverError::Read)?;
+                        let len = result.map_err(AsyncEspNetifChannelError::Read)?;
                         if len == 0 {
                             return Ok(());
                         }
                         self.driver
                             .rx(&rx_buffer[..len])
-                            .map_err(AsyncEspNetifDriverError::Netif)?;
+                            .map_err(AsyncEspNetifChannelError::Netif)?;
                     }
                     Either::Second(packet) => io
                         .write_all(&packet)
                         .await
-                        .map_err(AsyncEspNetifDriverError::Write)?,
+                        .map_err(AsyncEspNetifChannelError::Write)?,
                 }
             }
         }
