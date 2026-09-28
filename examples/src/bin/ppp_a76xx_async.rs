@@ -31,10 +31,6 @@ mod example {
         "CELLULAR_APN",
         "set CELLULAR_APN to your SIM provider's APN"
     );
-    const SIM_PIN: &str = match option_env!("SIM_PIN") {
-        Some(pin) => pin,
-        None => "",
-    };
     const DIAL_NUMBER: &str = match option_env!("CELLULAR_DIAL") {
         Some(number) => number,
         None => "*99#",
@@ -123,7 +119,7 @@ mod example {
             }
             modem.wait_for_connection().await;
 
-            let mut ppp_io = match modem.connect_ppp(SIM_PIN, APN, DIAL_NUMBER).await {
+            let mut ppp_io = match modem.connect_ppp_without_pin(APN, DIAL_NUMBER).await {
                 Ok(io) => io,
                 Err(error) => {
                     log::error!("modem PPP negotiation failed: {error:?}");
