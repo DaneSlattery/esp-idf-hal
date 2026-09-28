@@ -37,6 +37,10 @@ async-io = { workspace = true }
 mipidsi = { workspace = true }
 display-interface-spi = { workspace = true }
 embedded-graphics = { workspace = true }
+a76xx = { git = "https://github.com/DaneSlattery/a76xx.git", branch = "main", features = ["log"] }
+edge-executor = "0.5"
+embassy-time = { version = "0.5", features = ["generic-queue-8"] }
+static_cell = "2"
 
 [build-dependencies]
 embuild = { workspace = true }
