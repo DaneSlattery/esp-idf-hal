@@ -10,7 +10,7 @@
 #[cfg(esp_idf_lwip_ppp_support)]
 mod example {
     use core::future::pending;
-    use std::time::Duration;
+    use core::time::Duration;
 
     use a76xx::{Error as ModemError, ModemPower, ModemResources};
     use esp_idf_svc::eventloop::EspSystemEventLoop;
