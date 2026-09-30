@@ -10,12 +10,9 @@
 #[cfg(esp_idf_lwip_ppp_support)]
 mod example {
     use core::future::pending;
-    use std::sync::mpsc;
     use std::time::Duration;
 
     use a76xx::{Error as ModemError, ModemPower, ModemResources};
-    use edge_executor::LocalExecutor;
-    use embassy_time::{Duration as EmbassyDuration, Timer};
     use esp_idf_svc::eventloop::EspSystemEventLoop;
     use esp_idf_svc::hal::gpio::{self, Output, PinDriver};
     use esp_idf_svc::hal::peripherals::Peripherals;
@@ -25,6 +22,7 @@ mod example {
     use esp_idf_svc::netif::{
         AsyncEspNetifChannel, EspNetif, IpEvent, NetifStack, PppConfiguration,
     };
+    use esp_idf_svc::timer::{EspAsyncTimer, EspTaskTimerService};
     use static_cell::ConstStaticCell;
 
     const APN: &str = env!(
@@ -43,6 +41,7 @@ mod example {
     struct BoardPower {
         enable: PinDriver<'static, Output>,
         power_key: PinDriver<'static, Output>,
+        timer: EspAsyncTimer,
     }
 
     impl ModemPower for BoardPower {
@@ -50,15 +49,24 @@ mod example {
             self.enable
                 .set_high()
                 .map_err(|_| ModemError::PowerOnError)?;
-            Timer::after(EmbassyDuration::from_millis(100)).await;
+            self.timer
+                .after(Duration::from_millis(100))
+                .await
+                .map_err(|_| ModemError::PowerOnError)?;
             self.power_key
                 .set_high()
                 .map_err(|_| ModemError::PowerOnError)?;
-            Timer::after(EmbassyDuration::from_millis(100)).await;
+            self.timer
+                .after(Duration::from_millis(100))
+                .await
+                .map_err(|_| ModemError::PowerOnError)?;
             self.power_key
                 .set_low()
                 .map_err(|_| ModemError::PowerOnError)?;
-            Timer::after(EmbassyDuration::from_secs(10)).await;
+            self.timer
+                .after(Duration::from_secs(10))
+                .await
+                .map_err(|_| ModemError::PowerOnError)?;
             Ok(())
         }
     }
@@ -69,9 +77,11 @@ mod example {
 
         let peripherals = Peripherals::take()?;
         let system_loop = EspSystemEventLoop::take()?;
+        let timer_service = EspTaskTimerService::new()?;
         let power = BoardPower {
             enable: PinDriver::output(peripherals.pins.gpio2)?,
             power_key: PinDriver::output(peripherals.pins.gpio4)?,
+            timer: timer_service.timer_async()?,
         };
         let mut uart = AsyncUartDriver::new(
             peripherals.uart1,
@@ -88,56 +98,53 @@ mod example {
                 netif.set_ppp_conf(&PppConfiguration::default())
             })?;
         let handle = bridge.driver().netif().handle() as usize;
-        let (ip_sender, ip_receiver) = mpsc::sync_channel(1);
-        let _subscription = system_loop.subscribe::<IpEvent, _>(move |event| {
-            if event.is_for_handle(handle as *mut _) && matches!(event, IpEvent::DhcpIpAssigned(_))
-            {
-                let _ = ip_sender.try_send(());
-            }
-        })?;
+        let mut subscription = system_loop.subscribe_async::<IpEvent>()?;
         bridge.driver_mut().start()?;
 
-        std::thread::Builder::new()
-            .name("ppp-ip-monitor".into())
-            .stack_size(8 * 1024)
-            .spawn(
-                move || match ip_receiver.recv_timeout(Duration::from_secs(120)) {
-                    Ok(()) => log::info!("PPP has an IPv4 address"),
-                    Err(error) => log::error!("PPP address wait failed: {error}"),
-                },
-            )?;
-
-        let executor = LocalExecutor::new();
-        esp_idf_svc::hal::task::block_on(executor.run(async {
+        esp_idf_svc::hal::task::block_on(async {
             let (uart_tx, uart_rx) = uart.split();
-            executor.spawn(rx_pump.run(uart_rx)).detach();
-            executor.spawn(tx_pump.run(uart_tx)).detach();
-
-            if let Err(error) = modem.power_on().await {
-                log::error!("modem power-on failed: {error:?}");
-                pending::<()>().await;
-            }
-            modem.wait_for_connection().await;
-
-            let mut ppp_io = match modem.connect_ppp_without_pin(APN, DIAL_NUMBER).await {
-                Ok(io) => io,
-                Err(error) => {
-                    log::error!("modem PPP negotiation failed: {error:?}");
+            let modem_task = async {
+                if let Err(error) = modem.power_on().await {
+                    log::error!("modem power-on failed: {error:?}");
                     pending::<()>().await;
-                    unreachable!()
                 }
-            };
-            executor
-                .spawn(async move {
+                modem.wait_for_connection().await;
+
+                let mut ppp_io = match modem.connect_ppp_without_pin(APN, DIAL_NUMBER).await {
+                    Ok(io) => io,
+                    Err(error) => {
+                        log::error!("modem PPP negotiation failed: {error:?}");
+                        pending::<()>().await;
+                        unreachable!()
+                    }
+                };
+                let monitor = async {
+                    loop {
+                        match subscription.recv().await {
+                            Ok(event)
+                                if event.is_for_handle(handle as *mut _)
+                                    && matches!(event, IpEvent::DhcpIpAssigned(_)) =>
+                            {
+                                log::info!("PPP has an IPv4 address");
+                            }
+                            Ok(_) => {}
+                            Err(error) => {
+                                log::error!("IP event subscription stopped: {error}");
+                                break;
+                            }
+                        }
+                    }
+                };
+                let bridge_task = async {
                     let mut rx_buffer = [0_u8; 1600];
                     if let Err(error) = bridge.run(&mut ppp_io, &mut rx_buffer).await {
                         log::error!("PPP bridge stopped: {error}");
                     }
-                })
-                .detach();
-
-            pending::<()>().await;
-        }));
+                };
+                futures::join!(monitor, bridge_task);
+            };
+            futures::join!(rx_pump.run(uart_rx), tx_pump.run(uart_tx), modem_task);
+        });
         unreachable!("the modem pumps run forever")
     }
 }

@@ -1083,10 +1083,16 @@ mod driver {
 
     /// Bridges an [`EspNetifDriver`] to asynchronous byte streams.
     ///
-    /// This adapter is transport- and modem-agnostic. A modem driver is expected
-    /// to complete its command negotiation and enter PPP data mode before its
-    /// read and write halves are passed to [`Self::receive`] and
-    /// [`Self::transmit`]. The two methods should be driven concurrently.
+    /// This adapter is intended for PPP byte streams. A modem driver must
+    /// complete command negotiation and enter PPP data mode before calling
+    /// [`Self::run`]. ESP-IDF's PPP input deframes the byte stream, so reads may
+    /// contain partial frames, multiple frames, or splits within an escape
+    /// sequence. Use a reasonably large receive buffer to avoid a heap
+    /// allocation and TCP/IP mailbox message for every small read.
+    ///
+    /// Other netif types may require exactly one complete L2 frame per receive
+    /// call and different buffer ownership. Do not use this adapter for them
+    /// without checking their ESP-IDF input contract.
     ///
     /// ESP-NETIF invokes its transmit callback synchronously, while
     /// [`Write`] is asynchronous. Outbound packets are therefore
@@ -1155,46 +1161,6 @@ mod driver {
             })?;
 
             Ok(Self { driver, tx_queue })
-        }
-
-        /// Reads one chunk from a PPP data stream and passes it to ESP-NETIF.
-        ///
-        /// Repeatedly call this concurrently with [`Self::transmit`]. A return
-        /// value of zero has the meaning assigned by the underlying reader.
-        pub async fn receive<R>(
-            &self,
-            mut reader: R,
-            buffer: &mut [u8],
-        ) -> Result<usize, AsyncEspNetifChannelError<R::Error>>
-        where
-            R: Read,
-        {
-            let len = reader
-                .read(buffer)
-                .await
-                .map_err(AsyncEspNetifChannelError::Read)?;
-
-            if len > 0 {
-                self.driver
-                    .rx(&buffer[..len])
-                    .map_err(AsyncEspNetifChannelError::Netif)?;
-            }
-
-            Ok(len)
-        }
-
-        /// Writes one packet produced by ESP-NETIF to a PPP data stream.
-        ///
-        /// Repeatedly call this concurrently with [`Self::receive`].
-        pub async fn transmit<W>(&self, mut writer:  W) -> Result<usize, W::Error>
-        where
-            W: Write,
-        {
-            let packet = self.tx_queue.receive().await;
-            let len = packet.len();
-            writer.write_all(&packet).await?;
-
-            Ok(len)
         }
 
         /// Runs both directions of the bridge over one bidirectional PPP stream.
