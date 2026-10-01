@@ -25,10 +25,7 @@ mod example {
     use esp_idf_svc::timer::{EspAsyncTimer, EspTaskTimerService};
     use static_cell::ConstStaticCell;
 
-    const APN: &str = env!(
-        "CELLULAR_APN",
-        "set CELLULAR_APN to your SIM provider's APN"
-    );
+    const APN: Option<&str> = option_env!("CELLULAR_APN");
     const DIAL_NUMBER: &str = match option_env!("CELLULAR_DIAL") {
         Some(number) => number,
         None => "*99#",
@@ -72,6 +69,8 @@ mod example {
     }
 
     pub fn run() -> anyhow::Result<()> {
+        let apn =
+            APN.ok_or_else(|| anyhow::anyhow!("set CELLULAR_APN to your SIM provider's APN"))?;
         esp_idf_svc::sys::link_patches();
         esp_idf_svc::log::EspLogger::initialize_default();
 
@@ -110,7 +109,7 @@ mod example {
                 }
                 modem.wait_for_connection().await;
 
-                let mut ppp_io = match modem.connect_ppp_without_pin(APN, DIAL_NUMBER).await {
+                let mut ppp_io = match modem.connect_ppp_without_pin(apn, DIAL_NUMBER).await {
                     Ok(io) => io,
                     Err(error) => {
                         log::error!("modem PPP negotiation failed: {error:?}");
