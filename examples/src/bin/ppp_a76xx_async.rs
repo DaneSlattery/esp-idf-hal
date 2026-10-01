@@ -13,6 +13,7 @@ mod example {
     use core::time::Duration;
 
     use a76xx::{Error as ModemError, ModemPower, ModemResources};
+    use embassy_futures::select::select;
     use esp_idf_svc::eventloop::EspSystemEventLoop;
     use esp_idf_svc::hal::gpio::{self, Output, PinDriver};
     use esp_idf_svc::hal::peripherals::Peripherals;
@@ -140,11 +141,15 @@ mod example {
                         log::error!("PPP bridge stopped: {error}");
                     }
                 };
-                futures::join!(monitor, bridge_task);
+                select(monitor, bridge_task).await;
             };
-            futures::join!(rx_pump.run(uart_rx), tx_pump.run(uart_tx), modem_task);
+            select(
+                rx_pump.run(uart_rx),
+                select(tx_pump.run(uart_tx), modem_task),
+            )
+            .await;
         });
-        unreachable!("the modem pumps run forever")
+        anyhow::bail!("a PPP task stopped")
     }
 }
 
