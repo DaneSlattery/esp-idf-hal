@@ -24,7 +24,6 @@ mod example {
         AsyncEspNetifChannel, EspNetif, IpEvent, NetifStack, PppConfiguration,
     };
     use esp_idf_svc::timer::{EspAsyncTimer, EspTaskTimerService};
-    use static_cell::ConstStaticCell;
 
     const APN: Option<&str> = option_env!("CELLULAR_APN");
     const DIAL_NUMBER: &str = match option_env!("CELLULAR_DIAL") {
