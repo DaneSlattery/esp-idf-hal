@@ -33,8 +33,7 @@ mod example {
     };
 
     type Resources = ModemResources<2048, 2048, 512, 512>;
-    static MODEM_RESOURCES: ConstStaticCell<Resources> =
-        ConstStaticCell::new(ModemResources::new());
+
 
     struct BoardPower {
         enable: PinDriver<'static, Output>,
@@ -91,7 +90,10 @@ mod example {
             Option::<gpio::Gpio0>::None,
             &UartConfig::default().baudrate(Hertz(115_200)),
         )?;
-        let (mut modem, rx_pump, tx_pump) = a76xx::Modem::new(MODEM_RESOURCES.take(), power);
+
+        let modem_resources: &'static mut Resources =
+            Box::leak(Box::new(ModemResources::new()));
+        let (mut modem, rx_pump, tx_pump) = a76xx::Modem::new(modem_resources, power);
 
         let mut bridge =
             AsyncEspNetifChannel::<_, 8>::new(EspNetif::new(NetifStack::Ppp)?, |netif| {
