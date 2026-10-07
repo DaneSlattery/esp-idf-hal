@@ -33,7 +33,6 @@ mod example {
 
     type Resources = ModemResources<2048, 2048, 512, 512>;
 
-
     struct BoardPower {
         enable: PinDriver<'static, Output>,
         power_key: PinDriver<'static, Output>,
@@ -90,8 +89,7 @@ mod example {
             &UartConfig::default().baudrate(Hertz(115_200)),
         )?;
 
-        let modem_resources: &'static mut Resources =
-            Box::leak(Box::new(ModemResources::new()));
+        let modem_resources: &'static mut Resources = Box::leak(Box::new(ModemResources::new()));
         let (mut modem, rx_pump, tx_pump) = a76xx::Modem::new(modem_resources, power);
 
         let mut bridge =
