@@ -1120,12 +1120,20 @@ impl asynch::Connection for EspAsyncMqttConnection {
 /// interpreting the other fields: TLS and socket errors apply to transport
 /// failures, while the connect return code applies to connections refused by
 /// the broker.
+///
+/// ESP-IDF does not reset every field for each error. Fields unrelated to
+/// [`Self::error_type`] may contain stale values from an earlier error and must
+/// not be interpreted as details of the current error. For example, a broker
+/// refusal may retain the socket `errno` from an earlier transport failure.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
 pub struct EspMqttError(esp_mqtt_error_codes_t);
 
 impl EspMqttError {
     /// The complete ESP-IDF error details.
+    ///
+    /// Fields unrelated to [`Self::error_type`] may contain stale values from
+    /// an earlier error.
     ///
     /// If ESP-IDF supplied no error handle, all fields are zero, including
     /// `error_type` (`MQTT_ERROR_TYPE_NONE`).
@@ -1139,26 +1147,37 @@ impl EspMqttError {
     }
 
     /// The last ESP-TLS error, or `None` if it is `ESP_OK` or details are unavailable.
+    ///
+    /// Only meaningful for `MQTT_ERROR_TYPE_TCP_TRANSPORT`; otherwise the value
+    /// may be stale, including a `Some` value from an earlier transport failure.
     pub fn esp_tls_last_esp_err(&self) -> Option<EspError> {
         EspError::from(self.0.esp_tls_last_esp_err)
     }
 
     /// The underlying TLS stack error code. Returns zero if details are unavailable.
+    ///
+    /// Only meaningful for `MQTT_ERROR_TYPE_TCP_TRANSPORT`; otherwise it may be stale.
     pub fn esp_tls_stack_err(&self) -> core::ffi::c_int {
         self.0.esp_tls_stack_err
     }
 
     /// The TLS certificate verification flags. Returns zero if details are unavailable.
+    ///
+    /// Only meaningful for `MQTT_ERROR_TYPE_TCP_TRANSPORT`; otherwise they may be stale.
     pub fn esp_tls_cert_verify_flags(&self) -> core::ffi::c_int {
         self.0.esp_tls_cert_verify_flags
     }
 
     /// The broker's connection refusal code. Returns zero if details are unavailable.
+    ///
+    /// Only meaningful for `MQTT_ERROR_TYPE_CONNECTION_REFUSED`; otherwise it may be stale.
     pub fn connect_return_code(&self) -> esp_mqtt_connect_return_code_t {
         self.0.connect_return_code
     }
 
     /// The underlying socket's `errno`. Returns zero if details are unavailable.
+    ///
+    /// Only meaningful for `MQTT_ERROR_TYPE_TCP_TRANSPORT`; otherwise it may be stale.
     pub fn esp_transport_sock_errno(&self) -> core::ffi::c_int {
         self.0.esp_transport_sock_errno
     }
